@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -21,7 +21,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-EXCEL_FILE = "students.xlsx"
+# ── Paths — work both locally and on Railway ──────────────────────────────────
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR  = os.path.join(BASE_DIR, "static")
+EXCEL_FILE  = os.path.join(BASE_DIR, "students.xlsx")
+INDEX_FILE  = os.path.join(STATIC_DIR, "index.html")
 
 COLUMNS = [
     "id", "name", "roll_number", "email", "phone",
@@ -29,6 +33,7 @@ COLUMNS = [
     "address", "grade", "created_at"
 ]
 
+# ── Models ────────────────────────────────────────────────────────────────────
 class Student(BaseModel):
     name: str
     roll_number: str
@@ -52,14 +57,15 @@ class StudentUpdate(BaseModel):
     address: Optional[str] = None
     grade: Optional[str] = None
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def clean_value(val):
     if val is None:
         return None
     if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
         return None
-    if isinstance(val, (np.integer,)):
+    if isinstance(val, np.integer):
         return int(val)
-    if isinstance(val, (np.floating,)):
+    if isinstance(val, np.floating):
         return None if math.isnan(float(val)) else float(val)
     if isinstance(val, np.bool_):
         return bool(val)
@@ -68,13 +74,11 @@ def clean_value(val):
 def df_to_records(df: pd.DataFrame) -> list:
     records = []
     for _, row in df.iterrows():
-        record = {}
-        for col in df.columns:
-            record[col] = clean_value(row[col])
-        records.append(record)
+        records.append({col: clean_value(row[col]) for col in df.columns})
     return records
 
 def init_excel():
+    os.makedirs(BASE_DIR, exist_ok=True)
     if not os.path.exists(EXCEL_FILE):
         pd.DataFrame(columns=COLUMNS).to_excel(EXCEL_FILE, index=False)
         return
@@ -107,12 +111,20 @@ def generate_id(df: pd.DataFrame) -> int:
     valid_ids = df["id"].dropna()
     return int(valid_ids.max()) + 1 if not valid_ids.empty else 1
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# ── Mount static files ────────────────────────────────────────────────────────
+if os.path.isdir(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
-    return FileResponse("static/index.html")
+    if os.path.exists(INDEX_FILE):
+        return FileResponse(INDEX_FILE)
+    return HTMLResponse("<h2>EduTrack API is running ✅ — static/index.html not found</h2>")
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "excel": os.path.exists(EXCEL_FILE), "static": os.path.isdir(STATIC_DIR)}
 
 @app.get("/api/students")
 def get_all_students():
@@ -176,21 +188,15 @@ def get_dashboard_stats():
     df = read_students()
     if df.empty:
         return {
-            "total_students": 0,
-            "courses": {},
-            "semesters": {},
-            "genders": {},
-            "grades": {},
-            "recent_students": []
+            "total_students": 0, "courses": {}, "semesters": {},
+            "genders": {}, "grades": {}, "recent_students": []
         }
-
     def safe_counts(col):
         if col not in df.columns:
             return {}
         series = df[col].dropna().astype(str)
         series = series[series.str.strip() != ""]
         return {str(k): int(v) for k, v in series.value_counts().items()}
-
     return {
         "total_students": len(df),
         "courses":   safe_counts("course"),
@@ -210,7 +216,10 @@ def search_students(q: str = ""):
     )
     return df_to_records(df[mask])
 
-# ── Server start — Railway compatible PORT ────────────────────────────────────
+# ── Start server — Railway uses $PORT automatically ───────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
+    print(f"Starting server on port {port}")
+    print(f"Static dir: {STATIC_DIR} — exists: {os.path.isdir(STATIC_DIR)}")
+    print(f"Excel file: {EXCEL_FILE} — exists: {os.path.exists(EXCEL_FILE)}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
