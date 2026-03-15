@@ -23,7 +23,6 @@ app.add_middleware(
 
 EXCEL_FILE = "students.xlsx"
 
-# ── All expected columns ───────────────────────────────────────────────────────
 COLUMNS = [
     "id", "name", "roll_number", "email", "phone",
     "course", "semester", "gender", "date_of_birth",
@@ -53,9 +52,7 @@ class StudentUpdate(BaseModel):
     address: Optional[str] = None
     grade: Optional[str] = None
 
-# ── Clean NaN/inf values so JSON never crashes ─────────────────────────────────
 def clean_value(val):
-    """Convert NaN, inf, numpy types → Python safe types"""
     if val is None:
         return None
     if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
@@ -69,7 +66,6 @@ def clean_value(val):
     return val
 
 def df_to_records(df: pd.DataFrame) -> list:
-    """Safely convert DataFrame to list of dicts — no NaN anywhere"""
     records = []
     for _, row in df.iterrows():
         record = {}
@@ -78,13 +74,10 @@ def df_to_records(df: pd.DataFrame) -> list:
         records.append(record)
     return records
 
-# ── Excel init — always ensure ALL columns exist ───────────────────────────────
 def init_excel():
     if not os.path.exists(EXCEL_FILE):
         pd.DataFrame(columns=COLUMNS).to_excel(EXCEL_FILE, index=False)
         return
-
-    # File exists — check and add any missing columns
     try:
         df = pd.read_excel(EXCEL_FILE)
         changed = False
@@ -95,13 +88,11 @@ def init_excel():
         if changed:
             df.to_excel(EXCEL_FILE, index=False)
     except Exception:
-        # Corrupt file — recreate
         pd.DataFrame(columns=COLUMNS).to_excel(EXCEL_FILE, index=False)
 
 def read_students() -> pd.DataFrame:
     init_excel()
     df = pd.read_excel(EXCEL_FILE)
-    # Ensure all columns exist even after read
     for col in COLUMNS:
         if col not in df.columns:
             df[col] = None
@@ -116,7 +107,7 @@ def generate_id(df: pd.DataFrame) -> int:
     valid_ids = df["id"].dropna()
     return int(valid_ids.max()) + 1 if not valid_ids.empty else 1
 
-# ── Routes ─────────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
@@ -183,7 +174,6 @@ def delete_student(student_id: int):
 @app.get("/api/dashboard/stats")
 def get_dashboard_stats():
     df = read_students()
-
     if df.empty:
         return {
             "total_students": 0,
@@ -194,7 +184,6 @@ def get_dashboard_stats():
             "recent_students": []
         }
 
-    # Safe value_counts — only on columns that exist and have data
     def safe_counts(col):
         if col not in df.columns:
             return {}
@@ -202,16 +191,13 @@ def get_dashboard_stats():
         series = series[series.str.strip() != ""]
         return {str(k): int(v) for k, v in series.value_counts().items()}
 
-    recent_df = df.tail(5)
-    recent = df_to_records(recent_df)
-
     return {
         "total_students": len(df),
-        "courses": safe_counts("course"),
+        "courses":   safe_counts("course"),
         "semesters": safe_counts("semester"),
-        "genders": safe_counts("gender"),
-        "grades": safe_counts("grade"),
-        "recent_students": recent
+        "genders":   safe_counts("gender"),
+        "grades":    safe_counts("grade"),
+        "recent_students": df_to_records(df.tail(5))
     }
 
 @app.get("/api/search")
@@ -224,5 +210,7 @@ def search_students(q: str = ""):
     )
     return df_to_records(df[mask])
 
+# ── Server start — Railway compatible PORT ────────────────────────────────────
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
