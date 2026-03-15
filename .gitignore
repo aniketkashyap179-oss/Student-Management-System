@@ -1,5 +1,7 @@
 venv/
 __pycache__/
 *.pyc
-students.xlsx
+*.pyo
 .env
+students.xlsx
+.DS_Store

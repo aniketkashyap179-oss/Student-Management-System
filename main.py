@@ -11,7 +11,7 @@ from datetime import datetime
 import uvicorn
 import math
 
-app = FastAPI(title="Student Management System", version="2.0.0")
+app = FastAPI(title="Student Management System", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,11 +21,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Paths — work both locally and on Railway ──────────────────────────────────
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR  = os.path.join(BASE_DIR, "static")
-EXCEL_FILE  = os.path.join(BASE_DIR, "students.xlsx")
-INDEX_FILE  = os.path.join(STATIC_DIR, "index.html")
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
+EXCEL_FILE = os.path.join(BASE_DIR, "students.xlsx")
 
 COLUMNS = [
     "id", "name", "roll_number", "email", "phone",
@@ -33,7 +32,6 @@ COLUMNS = [
     "address", "grade", "created_at"
 ]
 
-# ── Models ────────────────────────────────────────────────────────────────────
 class Student(BaseModel):
     name: str
     roll_number: str
@@ -57,7 +55,6 @@ class StudentUpdate(BaseModel):
     address: Optional[str] = None
     grade: Optional[str] = None
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 def clean_value(val):
     if val is None:
         return None
@@ -71,14 +68,10 @@ def clean_value(val):
         return bool(val)
     return val
 
-def df_to_records(df: pd.DataFrame) -> list:
-    records = []
-    for _, row in df.iterrows():
-        records.append({col: clean_value(row[col]) for col in df.columns})
-    return records
+def df_to_records(df):
+    return [{col: clean_value(row[col]) for col in df.columns} for _, row in df.iterrows()]
 
 def init_excel():
-    os.makedirs(BASE_DIR, exist_ok=True)
     if not os.path.exists(EXCEL_FILE):
         pd.DataFrame(columns=COLUMNS).to_excel(EXCEL_FILE, index=False)
         return
@@ -94,7 +87,7 @@ def init_excel():
     except Exception:
         pd.DataFrame(columns=COLUMNS).to_excel(EXCEL_FILE, index=False)
 
-def read_students() -> pd.DataFrame:
+def read_students():
     init_excel()
     df = pd.read_excel(EXCEL_FILE)
     for col in COLUMNS:
@@ -102,34 +95,36 @@ def read_students() -> pd.DataFrame:
             df[col] = None
     return df
 
-def save_students(df: pd.DataFrame):
+def save_students(df):
     df.to_excel(EXCEL_FILE, index=False)
 
-def generate_id(df: pd.DataFrame) -> int:
-    if df.empty or "id" not in df.columns or df["id"].isnull().all():
+def generate_id(df):
+    if df.empty or df["id"].isnull().all():
         return 1
-    valid_ids = df["id"].dropna()
-    return int(valid_ids.max()) + 1 if not valid_ids.empty else 1
+    return int(df["id"].dropna().max()) + 1
 
-# ── Mount static files ────────────────────────────────────────────────────────
+# Static files mount
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
     if os.path.exists(INDEX_FILE):
         return FileResponse(INDEX_FILE)
-    return HTMLResponse("<h2>EduTrack API is running ✅ — static/index.html not found</h2>")
+    return HTMLResponse("<h1>API Running OK</h1>")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "excel": os.path.exists(EXCEL_FILE), "static": os.path.isdir(STATIC_DIR)}
+    return {
+        "status": "ok",
+        "static_dir": os.path.isdir(STATIC_DIR),
+        "index_html": os.path.exists(INDEX_FILE),
+        "excel": os.path.exists(EXCEL_FILE)
+    }
 
 @app.get("/api/students")
 def get_all_students():
-    df = read_students()
-    return df_to_records(df)
+    return df_to_records(read_students())
 
 @app.get("/api/students/{student_id}")
 def get_student(student_id: int):
@@ -146,16 +141,10 @@ def add_student(student: Student):
         raise HTTPException(status_code=400, detail="Roll number already exists")
     new_id = generate_id(df)
     new_row = {
-        "id": new_id,
-        "name": student.name,
-        "roll_number": student.roll_number,
-        "email": student.email,
-        "phone": student.phone,
-        "course": student.course,
-        "semester": student.semester,
-        "gender": student.gender,
-        "date_of_birth": student.date_of_birth,
-        "address": student.address or "",
+        "id": new_id, "name": student.name, "roll_number": student.roll_number,
+        "email": student.email, "phone": student.phone, "course": student.course,
+        "semester": student.semester, "gender": student.gender,
+        "date_of_birth": student.date_of_birth, "address": student.address or "",
         "grade": student.grade or "",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
@@ -187,22 +176,19 @@ def delete_student(student_id: int):
 def get_dashboard_stats():
     df = read_students()
     if df.empty:
-        return {
-            "total_students": 0, "courses": {}, "semesters": {},
-            "genders": {}, "grades": {}, "recent_students": []
-        }
+        return {"total_students": 0, "courses": {}, "semesters": {}, "genders": {}, "grades": {}, "recent_students": []}
     def safe_counts(col):
         if col not in df.columns:
             return {}
-        series = df[col].dropna().astype(str)
-        series = series[series.str.strip() != ""]
-        return {str(k): int(v) for k, v in series.value_counts().items()}
+        s = df[col].dropna().astype(str)
+        s = s[s.str.strip() != ""]
+        return {str(k): int(v) for k, v in s.value_counts().items()}
     return {
         "total_students": len(df),
-        "courses":   safe_counts("course"),
+        "courses": safe_counts("course"),
         "semesters": safe_counts("semester"),
-        "genders":   safe_counts("gender"),
-        "grades":    safe_counts("grade"),
+        "genders": safe_counts("gender"),
+        "grades": safe_counts("grade"),
         "recent_students": df_to_records(df.tail(5))
     }
 
@@ -211,15 +197,9 @@ def search_students(q: str = ""):
     df = read_students()
     if not q or df.empty:
         return df_to_records(df)
-    mask = df.apply(
-        lambda row: row.astype(str).str.contains(q, case=False, na=False).any(), axis=1
-    )
+    mask = df.apply(lambda row: row.astype(str).str.contains(q, case=False, na=False).any(), axis=1)
     return df_to_records(df[mask])
 
-# ── Start server — Railway uses $PORT automatically ───────────────────────────
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    print(f"Starting server on port {port}")
-    print(f"Static dir: {STATIC_DIR} — exists: {os.path.isdir(STATIC_DIR)}")
-    print(f"Excel file: {EXCEL_FILE} — exists: {os.path.exists(EXCEL_FILE)}")
+    port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
